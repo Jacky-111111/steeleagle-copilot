@@ -1,0 +1,20 @@
+[project]
+name = "nl2dsl"
+version = "0.1.0"
+description = "Natural-language to SteelEagle DSL translation with validation and self-correction"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+openai = ["openai>=1.0.0"]
+
+[project.scripts]
+nl2dsl = "nl2dsl.cli:main"
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["nl2dsl*"]

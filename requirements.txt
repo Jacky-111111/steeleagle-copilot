@@ -1,0 +1,6 @@
+# Runtime
+openai>=1.0.0
+
+# Note: the core pipeline + validator have NO third-party dependencies.
+# `openai` is only needed when using the real LLM (OpenAILLM). Tests run
+# fully offline with FakeLLM and need nothing here.
