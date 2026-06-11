@@ -15,7 +15,7 @@ from pathlib import Path
 
 from .llm import OpenAILLM
 from .pipeline import translate
-from .validator import validate, to_mission_ir
+from .validator import validate, to_mission_ir, normalize_dsl
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -38,6 +38,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.validate_only:
         dsl_text = args.validate_only.read_text()
+        _, auto_fixes = normalize_dsl(dsl_text)
+        for fix in auto_fixes:
+            print(f"auto-fix: {fix}", file=sys.stderr)
         errs = validate(dsl_text)
         if errs:
             print("Validation FAILED:", file=sys.stderr)
@@ -92,6 +95,8 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     # Success!
+    for fix in result.auto_fixes:
+        print(f"auto-fix: {fix}", file=sys.stderr)
     if args.dsl_out:
         args.dsl_out.write_text(result.dsl_code)
         print(f"Wrote DSL to {args.dsl_out}", file=sys.stderr)

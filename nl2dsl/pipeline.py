@@ -18,7 +18,7 @@ from typing import Any
 
 from .llm import LLM, LLMResponse
 from .prompt import build_system_prompt, build_user_prompt
-from .validator import validate, to_mission_ir, ValidationError
+from .validator import validate, to_mission_ir, normalize_dsl, ValidationError
 from .compiler import compile_dsl
 
 
@@ -31,6 +31,9 @@ class Attempt:
     dsl_code: str
     notes: str
     errors: list[ValidationError] = field(default_factory=list)
+    # Forgiving auto-fixes the system applied to this attempt's DSL before
+    # validating/compiling (e.g. removed empty stanza, appended newline).
+    auto_fixes: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -49,6 +52,11 @@ class Result:
     def final_errors(self) -> list[ValidationError]:
         return self.attempts[-1].errors if self.attempts else []
 
+    @property
+    def auto_fixes(self) -> list[str]:
+        """Auto-fixes applied to the final (returned) DSL, if any."""
+        return self.attempts[-1].auto_fixes if self.attempts else []
+
 
 def translate(
     natural_language: str,
@@ -64,15 +72,19 @@ def translate(
         user_prompt = build_user_prompt(natural_language, prior_error=prior_error)
         rsp: LLMResponse = llm.complete(system_prompt, user_prompt)
 
-        errors = validate(rsp.dsl_code)
+        # Normalize once here so the stored DSL, the validator, and the real
+        # compiler all see identical (auto-fixed) text.
+        dsl_code, auto_fixes = normalize_dsl(rsp.dsl_code)
+        errors = validate(dsl_code)
         attempts.append(Attempt(
-            dsl_code=rsp.dsl_code,
+            dsl_code=dsl_code,
             notes=rsp.notes,
             errors=errors,
+            auto_fixes=auto_fixes,
         ))
 
         if not errors:
-            comp = compile_dsl(rsp.dsl_code)
+            comp = compile_dsl(dsl_code)
             if comp.available and not comp.ok:
                 # Real compiler rejected it; feed its error back and retry.
                 attempts[-1].errors = [ValidationError(
@@ -82,10 +94,10 @@ def translate(
                 )
                 continue
             mission_ir = (comp.mission_json if comp.ok
-                          else to_mission_ir(rsp.dsl_code))
+                          else to_mission_ir(dsl_code))
             return Result(
                 ok=True,
-                dsl_code=rsp.dsl_code,
+                dsl_code=dsl_code,
                 mission_ir=mission_ir,
                 notes=rsp.notes,
                 attempts=attempts,

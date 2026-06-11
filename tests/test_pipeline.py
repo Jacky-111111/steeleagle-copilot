@@ -15,7 +15,7 @@ from pathlib import Path
 # Allow running this file directly
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from nl2dsl.validator import validate, to_mission_ir
+from nl2dsl.validator import validate, to_mission_ir, normalize_dsl
 from nl2dsl.pipeline import translate
 from nl2dsl.llm import FakeLLM, LLMResponse
 
@@ -243,6 +243,55 @@ Mission:
         done -> end
 """
     _assert_error_matching("invented_end", dsl, "NO terminal/end state")
+
+
+# -----------------------------------------------------------------------------
+# Normalization / auto-fixes (the e1/e2 failure modes)
+# -----------------------------------------------------------------------------
+def test_empty_stanzas_autofixed() -> None:
+    # The exact shape gpt-4o-mini produced for "take off then land": empty
+    # Data + Events stanzas, no trailing newline. Must validate cleanly and
+    # report the fixes it applied.
+    dsl = ("Data:\nActions:\n    TakeOff t(take_off_altitude = 10.0)\n"
+           "    Land l()\nEvents:\nMission:\n    Start t\n    During t:\n"
+           "        done -> l")
+    fixed, fixes = normalize_dsl(dsl)
+    assert "Data:" not in fixed and "Events:" not in fixed, fixed
+    assert fixed.endswith("\n")
+    assert any("Data" in f for f in fixes), fixes
+    assert any("Events" in f for f in fixes), fixes
+    assert any("newline" in f for f in fixes), fixes
+    if validate(dsl):
+        raise AssertionError(f"expected no errors after auto-fix, got: "
+                             f"{[str(e) for e in validate(dsl)]}")
+
+
+def test_trailing_newline_autofixed() -> None:
+    fixed, fixes = normalize_dsl("Actions:\n    Land l()\nMission:\n    Start l")
+    assert fixed.endswith("\n")
+    assert any("newline" in f for f in fixes), fixes
+
+
+def test_populated_stanzas_not_dropped() -> None:
+    # A non-empty Events stanza must survive normalization.
+    dsl = ("Data:\n    Detection d(class_name = person)\nActions:\n"
+           "    Track t(target = d)\nEvents:\n    DetectionFound f(target = d)\n"
+           "Mission:\n    Start t\n")
+    fixed, fixes = normalize_dsl(dsl)
+    assert "Data:" in fixed and "Events:" in fixed, fixed
+    assert fixes == [], fixes
+
+
+def test_empty_stanza_example_compiles() -> None:
+    from nl2dsl.compiler import compile_dsl, sdk_available
+    if not sdk_available():
+        print("        (steeleagle_sdk not installed; skipping)")
+        return
+    dsl = ("Data:\nActions:\n    TakeOff t(take_off_altitude = 10.0)\n"
+           "    Land l()\nEvents:\nMission:\n    Start t\n    During t:\n"
+           "        done -> l")
+    res = compile_dsl(dsl)
+    assert res.ok, f"expected compile success after auto-fix, got: {res.error}"
 
 
 # -----------------------------------------------------------------------------

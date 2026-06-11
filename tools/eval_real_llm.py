@@ -40,7 +40,8 @@ MISSIONS: list[dict] = [
     {"id": "e2", "tier": "easy",
      "request": "Take off to 20 meters, hold position for 60 seconds, then land."},
     {"id": "e3", "tier": "easy",
-     "request": "起飞到15米，原地等待30秒，然后返航。"},
+     "request": "Take off to 15 meters, wait in place for 30 seconds, then "
+                "return home."},
     {"id": "e4", "tier": "easy",
      "request": "Fly to latitude 40.4433, longitude -79.9436 at 12 meters "
                 "altitude, then return home."},
@@ -55,7 +56,8 @@ MISSIONS: list[dict] = [
                 "delivery point at lat 40.444, lon -79.945, altitude 8. "
                 "After arriving, wait 30 seconds and come back home."},
     {"id": "m3", "tier": "medium",
-     "request": "起飞后在名为 Campus 的区域边缘巡逻，电量低于35%就返航降落。"},
+     "request": "After taking off, patrol the edges of the area named Campus. "
+                "If the battery drops below 35 percent, return home and land."},
     {"id": "m4", "tier": "medium",
      "request": "Patrol the SearchZone area at 20 meters. After 5 minutes "
                 "of total mission time, return to home."},
@@ -73,8 +75,10 @@ MISSIONS: list[dict] = [
                 "confidence above 0.7, track it. Battery below 30 means "
                 "land immediately."},
     {"id": "h3", "tier": "hard",
-     "request": "无人机起飞到20米，在名为 Harbor 的区域沿边巡逻。看到船(boat)就"
-                "跟踪，跟丢了回去继续巡逻。任意时刻电量到40%立刻返航。"},
+     "request": "Take off to 20 meters and patrol the edges of the area named "
+                "Harbor. If you see a boat, track it; if you lose it, go back "
+                "to patrolling. Whenever the battery reaches 40 percent, "
+                "return home immediately."},
     {"id": "h4", "tier": "hard",
      "request": "Take off to 12 meters and patrol PathOne as a corridor "
                 "with 8 meter spacing at 90 degrees. When a person is "
@@ -153,7 +157,24 @@ def main() -> int:
 
     for m in missions:
         print(f"[{m['id']}] ({m['tier']}) {m['request'][:60]}...")
-        result = translate(m["request"], llm)
+
+        # A single transient API error (rate limit, 5xx, "headers too large",
+        # etc.) must not abort the whole eval. Record it and move on.
+        try:
+            result = translate(m["request"], llm)
+        except Exception as e:
+            print(f"        ERROR: {type(e).__name__}: {e}")
+            rows.append({
+                "id": m["id"], "tier": m["tier"], "ok": False,
+                "attempts": 0, "errors": [f"{type(e).__name__}: {e}"],
+            })
+            (out_dir / f"{m['id']}_ERROR.json").write_text(json.dumps({
+                "request": m["request"],
+                "ok": False,
+                "error": f"{type(e).__name__}: {e}",
+            }, ensure_ascii=False, indent=2))
+            continue
+
         status = "PASS" if result.ok else "FAIL"
         print(f"        {status} in {result.n_attempts} attempt(s)")
 
@@ -163,13 +184,14 @@ def main() -> int:
             "attempts": result.n_attempts, "errors": error_msgs,
         })
 
-        # Save every result (DSL + notes + errors) for review
+        # Save every result (DSL + notes + errors + auto-fixes) for review
         (out_dir / f"{m['id']}_{status}.json").write_text(json.dumps({
             "request": m["request"],
             "ok": result.ok,
             "attempts": [
                 {"dsl": a.dsl_code, "notes": a.notes,
-                 "errors": [str(e) for e in a.errors]}
+                 "errors": [str(e) for e in a.errors],
+                 "auto_fixes": a.auto_fixes}
                 for a in result.attempts
             ],
             "mission_json": result.mission_ir,

@@ -257,6 +257,69 @@ class _Ref:
 
 
 # -----------------------------------------------------------------------------
+# Normalization (forgiving auto-fixes / fallbacks)
+# -----------------------------------------------------------------------------
+def normalize_dsl(dsl_text: str) -> tuple[str, list[str]]:
+    """Apply forgiving auto-fixes for hard grammar rules LLM output violates.
+
+    These are corrections that carry NO semantic ambiguity — the user's intent
+    is unchanged — so we fix them silently instead of bouncing the model
+    through a retry. See `docs/AUTO_FIXES.md` for the full rationale.
+
+    1. Empty optional stanzas. A `Data:` or `Events:` header with nothing
+       declared under it makes the real SteelEagle grammar misparse the *next*
+       stanza's name as a declaration and choke on its colon (e.g.
+       "Unexpected token COLON at line 2, column 8"). Such empty headers are
+       dropped. `Actions:`/`Mission:` are required, so they are left in place
+       for the validator to flag as genuine errors if empty.
+    2. Missing trailing newline. The grammar requires the file to end with a
+       newline; otherwise the final transition line hits end-of-input
+       ("Unexpected token $END").
+
+    Returns `(normalized_text, fixes)` where `fixes` is a list of
+    human-readable descriptions of every change applied (empty == no change).
+    These are surfaced to the user so they know what the system corrected.
+    """
+    lines = dsl_text.splitlines()
+    fixes: list[str] = []
+
+    def _stanza_name(line: str) -> str | None:
+        s = _strip_comment(line).strip()
+        if s.endswith(":") and s[:-1] in catalog.STANZAS:
+            return s[:-1]
+        return None
+
+    headers = [(idx, name) for idx, name in
+               ((i, _stanza_name(l)) for i, l in enumerate(lines)) if name]
+
+    drop: set[int] = set()
+    for h, (idx, name) in enumerate(headers):
+        if name not in ("Data", "Events"):
+            continue
+        next_idx = headers[h + 1][0] if h + 1 < len(headers) else len(lines)
+        has_content = any(_strip_comment(lines[j]).strip()
+                          for j in range(idx + 1, next_idx))
+        if not has_content:
+            drop.add(idx)
+            fixes.append(
+                f"removed empty `{name}:` stanza (the grammar rejects a stanza "
+                f"header with no declarations under it)")
+
+    if drop:
+        lines = [l for i, l in enumerate(lines) if i not in drop]
+
+    text = "\n".join(lines)
+    if text and not text.endswith("\n"):
+        text += "\n"
+        # Only report it as a fix if the *original* lacked the newline;
+        # splitlines() drops a pre-existing terminator that we just restore.
+        if not dsl_text.endswith("\n"):
+            fixes.append("appended a trailing newline (the grammar requires "
+                         "the DSL file to end with a newline)")
+    return text, fixes
+
+
+# -----------------------------------------------------------------------------
 # Top-level parser
 # -----------------------------------------------------------------------------
 def parse(dsl_text: str) -> tuple[ParsedMission, list[ValidationError]]:
@@ -476,6 +539,7 @@ def _check_value_type(
 # Top-level entry point
 # -----------------------------------------------------------------------------
 def validate(dsl_text: str) -> list[ValidationError]:
+    dsl_text, _ = normalize_dsl(dsl_text)
     mission, errors = parse(dsl_text)
 
     # Catch duplicate instance names within each stanza
@@ -600,6 +664,7 @@ def to_mission_ir(dsl_text: str) -> dict[str, Any]:
     The intent is that, once `steeleagle_sdk` is available, we replace this
     with the real `asdict(build_mission(dsl_text))` call.
     """
+    dsl_text, _ = normalize_dsl(dsl_text)
     mission, _ = parse(dsl_text)
 
     def _dump_args(args: dict[str, Any]) -> dict[str, Any]:

@@ -51,6 +51,11 @@ def compile_dsl(dsl_text: str) -> CompileResult:
             error=f"steeleagle_sdk not available: {e}",
         )
 
+    # Apply the same forgiving auto-fixes the validator uses (empty-stanza
+    # removal, trailing newline) so the real grammar sees clean input.
+    from .validator import normalize_dsl
+    dsl_text, _ = normalize_dsl(dsl_text)
+
     try:
         ir = build_mission(dsl_text)
         return CompileResult(
