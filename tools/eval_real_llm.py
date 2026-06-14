@@ -86,7 +86,7 @@ MISSIONS: list[dict] = [
                 "patrol. At 45 percent battery, return home and land."},
 ]
 
-# Pricing per 1M tokens (June 2026; update as needed)
+# Pricing per 1M tokens (as in June 2026)
 PRICING = {
     "gpt-4o-mini": {"in": 0.15, "out": 0.60},
     "gpt-4o": {"in": 2.50, "out": 10.00},
@@ -150,6 +150,15 @@ def main() -> int:
 
     out_dir = Path(__file__).resolve().parent.parent / "eval_results"
     out_dir.mkdir(exist_ok=True)
+    # Clear stale results so the directory always reflects exactly this run.
+    # (Filenames embed PASS/FAIL/ERROR, so without this a status change would
+    # leave both the old and new file behind and the directory would mix runs.)
+    removed = 0
+    for old in out_dir.glob("*.json"):
+        old.unlink()
+        removed += 1
+    if removed:
+        print(f"Cleared {removed} stale result file(s) from {out_dir}/\n")
 
     llm = MeteredOpenAILLM(model=args.model)
     rows = []

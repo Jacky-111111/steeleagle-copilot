@@ -143,10 +143,10 @@ def _parse_args(arg_str: str) -> tuple[dict[str, Any], list[str]]:
         elif ch in ("'", '"'):
             in_quote = ch
             buf.append(ch)
-        elif ch == "[":
+        elif ch in ("[", "("):
             depth += 1
             buf.append(ch)
-        elif ch == "]":
+        elif ch in ("]", ")"):
             depth -= 1
             buf.append(ch)
         elif ch == "," and depth == 0:
@@ -213,6 +213,18 @@ def _parse_value(v: str) -> Any:
     except ValueError:
         pass
 
+    # Inline object call, e.g. `Location(latitude = 1.0, ...)`. The DSL does
+    # not support inline objects: declare the object in the Data: stanza and
+    # reference it by name. Give a targeted, fixable message.
+    m = re.match(r"^([A-Z][A-Za-z0-9_]*)\s*\(", v)
+    if m:
+        cls = m.group(1)
+        inst = cls.lower()
+        raise ValueError(
+            f"inline objects are not supported (`{cls}(...)`). Declare it in "
+            f"the Data: stanza, e.g. `{cls} {inst}(...)`, then reference it "
+            f"here by name: `{inst}`")
+
     # Bare identifier => reference
     if re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", v):
         return _Ref(v)
@@ -234,10 +246,10 @@ def _split_top(s: str) -> list[str]:
         elif ch in ("'", '"'):
             in_quote = ch
             buf.append(ch)
-        elif ch == "[":
+        elif ch in ("[", "("):
             depth += 1
             buf.append(ch)
-        elif ch == "]":
+        elif ch in ("]", ")"):
             depth -= 1
             buf.append(ch)
         elif ch == "," and depth == 0:
@@ -328,6 +340,8 @@ def parse(dsl_text: str) -> tuple[ParsedMission, list[ValidationError]]:
     errors: list[ValidationError] = []
     section: str | None = None
     current_during: DuringBlock | None = None
+    seen_stanzas: list[str] = []
+    max_stanza_idx = -1
 
     for i, raw_line in enumerate(dsl_text.splitlines(), start=1):
         line = _strip_comment(raw_line).rstrip()
@@ -338,7 +352,19 @@ def parse(dsl_text: str) -> tuple[ParsedMission, list[ValidationError]]:
 
         # Stanza header?
         if stripped.rstrip(":") in catalog.STANZAS and stripped.endswith(":"):
-            section = stripped.rstrip(":")
+            name = stripped.rstrip(":")
+            if name in seen_stanzas:
+                errors.append(ValidationError(i, f"duplicate `{name}:` stanza"))
+            else:
+                idx = catalog.STANZAS.index(name)
+                if idx < max_stanza_idx:
+                    errors.append(ValidationError(
+                        i,
+                        f"stanza `{name}:` is out of order; stanzas must appear "
+                        f"in the order Data, Actions, Events, Mission"))
+                max_stanza_idx = max(max_stanza_idx, idx)
+                seen_stanzas.append(name)
+            section = name
             current_during = None
             continue
 
@@ -467,6 +493,26 @@ def _check_declaration_against_catalog(
                 decl.line_no,
                 f"`{decl.class_name}` missing required parameter `{p.name}`"))
 
+    # Conditional-required params (e.g. Waypoints `algo = survey` needs
+    # spacing/angle_degrees/trigger_distance). These come from the
+    # hand-maintained overlay, not the field schema.
+    for rule in catalog.conditional_rules(decl.class_name):
+        matched = True
+        for pname, pval in rule.when.items():
+            actual = decl.args.get(pname)
+            actual_name = actual.name if isinstance(actual, _Ref) else actual
+            if actual_name != pval:
+                matched = False
+                break
+        if matched:
+            missing = [r for r in rule.require if r not in decl.args]
+            if missing:
+                cond = ", ".join(f"`{k} = {v}`" for k, v in rule.when.items())
+                errs.append(ValidationError(
+                    decl.line_no,
+                    f"`{decl.class_name}` with {cond} requires "
+                    + ", ".join(f"`{m}`" for m in missing)))
+
     # Type checks for params present
     for k, v in decl.args.items():
         p = valid_params.get(k)
@@ -591,6 +637,10 @@ def validate(dsl_text: str) -> list[ValidationError]:
                             f"AnyOf references unknown event `{it.name}`"))
 
     # Mission stanza checks
+    if not mission.actions:
+        errors.append(ValidationError(
+            None, "the Actions stanza is required and must declare at least "
+                  "one action"))
     if mission.start is None:
         errors.append(ValidationError(None, "Mission stanza is missing `Start:`"))
     elif mission.start not in action_by_name:

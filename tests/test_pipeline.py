@@ -282,6 +282,63 @@ def test_populated_stanzas_not_dropped() -> None:
     assert fixes == [], fixes
 
 
+def test_inline_object_rejected() -> None:
+    # e4 failure mode: model writes an inline object instead of declaring it
+    # in Data: and referencing by name. Must give an actionable message.
+    dsl = """
+Actions:
+    SetGlobalPosition fly_to(location = Location(latitude = 40.4433, longitude = -79.9436, altitude = 12.0))
+    ReturnToHome return_home()
+Mission:
+    Start fly_to
+    During fly_to:
+        done -> return_home
+"""
+    _assert_error_matching("inline_object", dsl, "inline objects are not supported")
+
+
+def test_stanza_out_of_order() -> None:
+    # m4 attempt-3 failure mode: Events before Actions. Must produce a clear
+    # message instead of the cryptic Lark "Unexpected COLON".
+    dsl = """
+Data:
+    Detection d(class_name = person)
+Events:
+    DetectionFound f(target = d)
+Actions:
+    Track t(target = d)
+Mission:
+    Start t
+"""
+    _assert_error_matching("stanza_order", dsl, "out of order")
+
+
+def test_conditional_required_survey_missing() -> None:
+    dsl = """
+Data:
+    Waypoints wp(alt = 20.0, area = SearchZone, algo = survey)
+Actions:
+    Patrol p(waypoints = wp)
+Events:
+Mission:
+    Start p
+"""
+    _assert_error_matching("survey_missing", dsl, "with `algo = survey` requires")
+
+
+def test_conditional_required_survey_satisfied() -> None:
+    dsl = """
+Data:
+    Waypoints wp(alt = 20.0, area = SearchZone, algo = survey, spacing = 10.0, angle_degrees = 0.0, trigger_distance = 5.0)
+Actions:
+    Patrol p(waypoints = wp)
+Events:
+Mission:
+    Start p
+"""
+    _assert_valid("survey_satisfied", dsl)
+
+
 def test_empty_stanza_example_compiles() -> None:
     from nl2dsl.compiler import compile_dsl, sdk_available
     if not sdk_available():

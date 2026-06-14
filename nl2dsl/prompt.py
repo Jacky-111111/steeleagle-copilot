@@ -13,7 +13,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Iterable
  
-from .catalog import Entry, actions, events, datatypes
+from .catalog import Entry, actions, events, declarable_datatypes
  
  
 EXAMPLES_DIR = Path(__file__).resolve().parent.parent / "examples"
@@ -49,7 +49,8 @@ def _render_section(title: str, entries: Iterable[Entry]) -> str:
  
 def render_catalog() -> str:
     return "\n\n".join([
-        _render_section("Available Datatypes", datatypes()),
+        _render_section("Available Datatypes (declare these in Data:)",
+                        declarable_datatypes()),
         _render_section("Available Actions", actions()),
         _render_section("Available Events", events()),
     ])
@@ -94,7 +95,10 @@ stanzas in this exact order: `Data:`, `Actions:`, `Events:`, `Mission:`.
    - CRITICAL: quoted strings are NOT valid. Write `area = Rectangle`,
      NEVER `area = 'Rectangle'`. Identifiers cannot contain hyphens.
    - Nested objects (e.g. a Detection used by Track or DetectionFound) must
-     be declared in `Data:` first and referenced by name. Do NOT use inline
+     be declared in `Data:` first and referenced by name. NEVER write an
+     inline object like `location = Location(latitude = ..., ...)`. Instead
+     declare `Location drop(latitude = ..., longitude = ..., altitude = ...)`
+     in `Data:` and write `location = drop`. Do NOT use inline
      object syntax like `Location loc(40.4, -79.9, 8.0)` — the compiler
      rejects it even though it looks plausible.
    - Use `=` for parameters (`param = value`). A colon also parses, but
@@ -122,6 +126,12 @@ stanzas in this exact order: `Data:`, `Actions:`, `Events:`, `Mission:`.
    - There is NO `end`, `stop`, or terminal state. A mission "ends" by
      transitioning into a terminal action such as `Land` or `ReturnToHome`
      (which you must declare in Actions:). Never write `-> end`.
+   - Every action you declare MUST be reachable from Start through some chain
+     of transitions. Do NOT declare actions you never transition into. If you
+     declare `Land`, wire it in (e.g. `During return_to_home: done -> land`).
+   - To express "after N seconds/minutes", add a `TimeReached` event and use
+     it as a transition trigger on the relevant `During` block. Do NOT add a
+     standalone `Wait` action to "represent" elapsed time.
  
 4. Comments start with `#` and run to the end of the line.
  
